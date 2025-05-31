@@ -1,4 +1,3 @@
-// 主程式（整合所有模式、VR眼鏡功能）
 let video;
 let handpose;
 let predictions = [];
@@ -16,8 +15,6 @@ let fruitImages = {};
 let slicedFruits = [];
 let bombs = [];
 let bombImg;
-let vrGlassesImg;
-let showVRGlasses = false;
 
 let questionSet = [
   { text: "教育科技強調科技與學習的整合", correct: true },
@@ -29,8 +26,14 @@ let questionSet = [
   { text: "教育科技與課程設計可結合進行教學創新", correct: true }
 ];
 
+// 新增 faceapi 相關變數
+let faceapi;
+let faces = [];
+let showVrGlasses = false;
+let vrGlassesImg;
+
 function preload() {
-  fruitImages['watermelon'] = loadImage('pngtree-cute-anthropomorphic-fruit-watermelon-png-image_2844683-removebg-preview');
+  fruitImages['watermelon'] = loadImage('pngtree-cute-anthropomorphic-fruit-watermelon-png-image_2844683-removebg-preview.png');
   fruitImages['watermelon_half'] = loadImage('b248b63a1961e1f38d33f42e2b10066a-removebg-preview.png');
   bombImg = loadImage('pngtree-ignite-the-bomb-image_2233752-removebg-preview.png');
   vrGlassesImg = loadImage('istockphoto-831337754-612x612-removebg-preview.png');
@@ -42,10 +45,20 @@ function setup() {
   video.size(width, height);
   video.hide();
 
-  handpose = ml5.handpose(video, () => console.log("模型已載入"));
+  // handpose
+  handpose = ml5.handpose(video, () => console.log("手部模型已載入"));
   handpose.on("predict", results => predictions = results);
 
+  // faceapi 初始化
+  const faceOptions = {
+    withLandmarks: true,
+    withDescriptors: false,
+    minConfidence: 0.5
+  };
+  faceapi = ml5.faceApi(video, faceOptions, faceModelReady);
+
   textAlign(CENTER, CENTER);
+
   setInterval(() => {
     if (gameStarted && timer > 0 && currentGame === "quiz") timer--;
   }, 1000);
@@ -59,9 +72,32 @@ function setup() {
     resetGame();
   });
 
+  // 新增 VR 眼鏡開關按鈕
   let vrBtn = createButton("VR眼鏡");
-  vrBtn.position(130, 10);
-  vrBtn.mousePressed(() => showVRGlasses = !showVRGlasses);
+  vrBtn.position(width - 80, 10);
+  vrBtn.mousePressed(() => {
+    showVrGlasses = !showVrGlasses;
+  });
+
+  resetGame();
+}
+
+function faceModelReady() {
+  console.log("臉部模型已載入");
+  detectFaces();
+}
+
+function detectFaces() {
+  faceapi.detect(gotFaces);
+}
+
+function gotFaces(err, result) {
+  if (err) {
+    console.error(err);
+    return;
+  }
+  faces = result;
+  detectFaces(); // 持續偵測
 }
 
 function resetGame() {
@@ -83,19 +119,28 @@ function resetGame() {
 }
 
 function draw() {
+  background(50);
+
+  // 影像鏡像翻轉顯示
   push();
   translate(width, 0);
   scale(-1, 1);
   image(video, 0, 0, width, height);
   pop();
 
+  // 顯示分數或狀態文字
   fill(255);
   textSize(20);
   stroke(0);
   strokeWeight(3);
-  text(currentGame === "quiz" ? `分數：${score}  時間：${timer}` : (currentGame === "blocks" ? `堆積木模式，高度：${blocks.length}` : `切西瓜遊戲 分數：${score}`), width / 2, 20);
+  text(
+    currentGame === "quiz" ? `分數：${score}  時間：${timer}` :
+    currentGame === "blocks" ? `堆積木模式，高度：${blocks.length}` :
+    `切西瓜遊戲 分數：${score}`, width / 2, 20
+  );
   noStroke();
 
+  // 遊戲邏輯與畫面
   if (currentGame === "quiz") {
     if (!gameStarted) {
       textSize(28);
@@ -152,7 +197,13 @@ function draw() {
     }
   }
 
+  // 手部追蹤與互動
   drawHandAndDetect();
+
+  // 顯示 VR 眼鏡（如果開啟且有偵測到臉）
+  if (showVrGlasses && faces.length > 0) {
+    drawVrGlasses();
+  }
 }
 
 function keyPressed() {
@@ -172,8 +223,6 @@ function drawHandAndDetect() {
     const indexTip = hand[8];
     const middleTip = hand[12];
     const wrist = hand[0];
-    const leftEye = hand[1];
-    const rightEye = hand[2];
 
     noFill();
     stroke(0, 255, 0);
@@ -183,157 +232,180 @@ function drawHandAndDetect() {
     let handX = width - indexTip[0];
     let handY = indexTip[1];
 
-    if (showVRGlasses) {
-      let eyeX = (width - leftEye[0] + width - rightEye[0]) / 2;
-      let eyeY = (leftEye[1] + rightEye[1]) / 2;
-      image(vrGlassesImg, eyeX - 100, eyeY - 50, 200, 100);
-    }
-
     if (currentGame === "quiz") {
       for (let i = bubbles.length - 1; i >= 0; i--) {
         let b = bubbles[i];
         if (dist(width - indexTip[0], indexTip[1], b.x, b.y) < b.r) {
           if (thumbTip[1] < wrist[1] - 30) {
-            if (b.correct) score++;
-            else score--;
+            score += b.correct ? 1 : -1;
             bubbles.splice(i, 1);
-          } else if (dist(indexTip[0], indexTip[1], middleTip[0], middleTip[1]) > 40) {
-            if (!b.correct) score++;
-            else score--;
-            bubbles.splice(i, 1);
+          } else if (dist(indexTip[0], indexTip[1], middleTip[0], middleTip[1]) < 30) {
+            // 加速泡泡下降
+            b.y += 15;
           }
         }
       }
     } else if (currentGame === "blocks") {
-      if (!holdingBlock) {
-        holdingBlock = new Block(handX, handY);
-      } else {
+      if (!holdingBlock && blockCooldown === 0) {
+        if (thumbTip[1] < wrist[1] - 30) {
+          blocks.push(new Block(handX, handY));
+          blockCooldown = 30;
+        }
+      } else if (holdingBlock) {
         holdingBlock.x = handX;
         holdingBlock.y = handY;
-
-        let distance = dist(indexTip[0], indexTip[1], middleTip[0], middleTip[1]);
-        if (distance > 60 && blockCooldown <= 0) {
-          holdingBlock.snapToStack();
+        if (thumbTip[1] > wrist[1] - 10) {
           blocks.push(holdingBlock);
           holdingBlock = null;
-          blockCooldown = 20;
+          blockCooldown = 30;
         }
       }
     } else if (currentGame === "fruit") {
       for (let i = fruits.length - 1; i >= 0; i--) {
-        if (fruits[i].isTouched(handX, handY)) {
+        let f = fruits[i];
+        if (dist(handX, handY, f.x, f.y) < f.size / 2) {
+          // 切水果
           score++;
-          slicedFruits.push(new SlicedFruit(fruits[i].x, fruits[i].y));
+          slicedFruits.push(new SlicedFruit(f.x, f.y, f.img));
           fruits.splice(i, 1);
         }
       }
       for (let i = bombs.length - 1; i >= 0; i--) {
-        if (bombs[i].isTouched(handX, handY)) {
-          score = max(0, score - 5);
-          bombs.splice(i, 1);
+        let b = bombs[i];
+        if (dist(handX, handY, b.x, b.y) < b.size / 2) {
+          // 撞到炸彈遊戲結束
+          textSize(48);
+          fill(255, 0, 0);
+          text("炸彈爆炸！遊戲結束", width / 2, height / 2);
+          noLoop();
         }
       }
     }
   }
 }
 
+// Bubble 類別
 class Bubble {
-  constructor(txt, correct) {
-    this.text = txt;
+  constructor(text, correct) {
+    this.text = text;
     this.correct = correct;
-    this.x = random(100, width - 100);
-    this.y = -50;
-    this.r = 60;
-    this.speed = 2;
+    this.x = random(width);
+    this.y = height + 30;
+    this.r = 40;
+    this.speed = 1;
   }
-  update() { this.y += this.speed; }
-  offScreen() { return this.y > height + this.r; }
+  update() {
+    this.y -= this.speed;
+  }
   display() {
-    fill(this.correct ? 'lightblue' : 'lightpink');
-    stroke(0);
+    fill(this.correct ? "green" : "red");
     ellipse(this.x, this.y, this.r * 2);
-    fill(0);
+    fill(255);
     textSize(14);
-    stroke(255);
-    strokeWeight(4);
-    text(this.text, this.x, this.y, this.r * 1.8);
-    noStroke();
+    textWrap(WORD);
+    text(this.text, this.x, this.y);
+  }
+  offScreen() {
+    return this.y < -this.r;
   }
 }
 
+// Block 類別
 class Block {
   constructor(x, y) {
     this.x = x;
     this.y = y;
-    this.w = 50;
-    this.h = 30;
-  }
-  snapToStack() {
-    this.y = height - 30 - blocks.length * 30;
-    this.x = constrain(this.x, this.w / 2, width - this.w / 2);
+    this.size = 50;
   }
   display() {
-    fill("gold");
-    stroke(0);
+    fill(200, 150, 0);
     rectMode(CENTER);
-    rect(this.x, this.y, this.w, this.h);
+    rect(this.x, this.y, this.size, this.size);
   }
 }
 
+// Fruit 類別
 class Fruit {
   constructor() {
-    this.x = random(100, width - 100);
-    this.y = height;
-    this.vx = random(-2, 2);
-    this.vy = -random(10, 18);
-    this.gravity = 0.4;
+    this.size = 80;
+    this.x = random(this.size / 2, width - this.size / 2);
+    this.y = height + this.size;
+    this.speed = random(2, 5);
+    this.img = fruitImages['watermelon'];
   }
   update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.vy += this.gravity;
+    this.y -= this.speed;
   }
-  offScreen() { return this.y > height + 50; }
-  display() { image(fruitImages['watermelon'], this.x - 40, this.y - 40, 80, 80); }
-  isTouched(x, y) { return dist(x, y, this.x, this.y) < 40; }
+  display() {
+    imageMode(CENTER);
+    image(this.img, this.x, this.y, this.size, this.size);
+  }
+  offScreen() {
+    return this.y < -this.size;
+  }
 }
 
+// SlicedFruit 類別
 class SlicedFruit {
-  constructor(x, y) {
+  constructor(x, y, img) {
     this.x = x;
     this.y = y;
-    this.vx1 = -2;
-    this.vx2 = 2;
-    this.vy = -2;
-    this.gravity = 0.2;
+    this.img = fruitImages['watermelon_half'];
+    this.speedY = random(1, 3);
+    this.alpha = 255;
   }
   update() {
-    this.x1 = this.x + this.vx1;
-    this.x2 = this.x + this.vx2;
-    this.y += this.vy;
-    this.vy += this.gravity;
+    this.y += this.speedY;
+    this.alpha -= 5;
   }
-  offScreen() { return this.y > height + 50; }
   display() {
-    image(fruitImages['watermelon_half'], this.x1 - 30, this.y - 30, 30, 60);
-    image(fruitImages['watermelon_half'], this.x2, this.y - 30, 30, 60);
+    tint(255, this.alpha);
+    imageMode(CENTER);
+    image(this.img, this.x, this.y, 60, 60);
+    noTint();
+  }
+  offScreen() {
+    return this.alpha <= 0;
   }
 }
 
+// Bomb 類別
 class Bomb {
   constructor() {
-    this.x = random(100, width - 100);
-    this.y = height;
-    this.vx = random(-2, 2);
-    this.vy = -random(10, 18);
-    this.gravity = 0.4;
+    this.size = 70;
+    this.x = random(this.size / 2, width - this.size / 2);
+    this.y = height + this.size;
+    this.speed = random(3, 6);
   }
   update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.vy += this.gravity;
+    this.y -= this.speed;
   }
-  offScreen() { return this.y > height + 50; }
-  display() { image(bombImg, this.x - 20, this.y - 20, 40, 40); }
-  isTouched(x, y) { return dist(x, y, this.x, this.y) < 40; }
+  display() {
+    imageMode(CENTER);
+    image(bombImg, this.x, this.y, this.size, this.size);
+  }
+  offScreen() {
+    return this.y < -this.size;
+  }
+}
+
+// VR眼鏡繪製函式
+function drawVrGlasses() {
+  let face = faces[0];
+  let leftEye = face.parts.leftEye;
+  let rightEye = face.parts.rightEye;
+
+  // 找眼睛中心點
+  let leftX = (leftEye[0]._x + leftEye[3]._x) / 2;
+  let leftY = (leftEye[0]._y + leftEye[3]._y) / 2;
+  let rightX = (rightEye[0]._x + rightEye[3]._x) / 2;
+  let rightY = (rightEye[0]._y + rightEye[3]._y) / 2;
+
+  // 鏡像調整
+  let centerX = width - (leftX + rightX) / 2;
+  let centerY = (leftY + rightY) / 2;
+  let glassesWidth = dist(leftX, leftY, rightX, rightY) * 2.3;
+  let glassesHeight = glassesWidth / vrGlassesImg.width * vrGlassesImg.height;
+
+  image(vrGlassesImg, centerX - glassesWidth / 2, centerY - glassesHeight / 2, glassesWidth, glassesHeight);
 }
